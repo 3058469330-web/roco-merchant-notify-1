@@ -1,8 +1,10 @@
 name: 远行商人提醒
 
 on:
-  # 由 cron-job.org 通过 workflow_dispatch API 定时触发（每天 8/12/16/20 点）
+  # 手动触发 + 定时触发（每天 8/12/16/20 点，Asia/Shanghai）
   workflow_dispatch:
+  schedule:
+    - cron: '0 0 8,12,16,20 * *'
 
 jobs:
   notify:
