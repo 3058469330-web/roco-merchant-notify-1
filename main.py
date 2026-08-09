@@ -102,11 +102,15 @@ def main() -> int:
             time.sleep(RETRY_INTERVAL)
 
     status = data.get("round", {}).get("status")
+    force_push = os.environ.get("FORCE_PUSH", "").strip().lower() in ("1", "true", "yes")
 
     # —— 只有开市且有商品才推送提醒 ——
-    if status != "open" or not data.get("items"):
+    if not force_push and (status != "open" or not data.get("items")):
         print("[info] 商人未开市或暂无商品，本次不推送")
         return 0
+
+    if force_push and (status != "open" or not data.get("items")):
+        print("[info] FORCE_PUSH 已启用,忽略开市判断,强制推送当前数据")
 
     title = f"🛒 {data.get('merchant_name', '远行商人')} 已开市"
     send_pushplus(pushplus_token, title, build_markdown(data))
