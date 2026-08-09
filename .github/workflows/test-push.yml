@@ -1,0 +1,48 @@
+name: 测试推送
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 发送测试消息到 pushplus
+        env:
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os, sys
+          import requests
+
+          token = os.environ["PUSHPLUS_TOKEN"].strip()
+          if not token:
+              print("[error] PUSHPLUS_TOKEN 未配置")
+              sys.exit(1)
+
+          resp = requests.post(
+              "https://www.pushplus.plus/send",
+              json={
+                  "token": token,
+                  "title": "✅ 远行商人提醒 - 推送测试成功",
+                  "content": (
+                      "如果你在微信收到这条消息,说明 pushplus 推送链路完全打通。\n\n"
+                      "- 数据源:咸鱼 API(已验证可调用)\n"
+                      "- 推送:pushplus\n"
+                      "- 触发:GitHub Actions workflow_dispatch\n\n"
+                      "定时任务会每天 8/12/16/20 点自动跑。"
+                  ),
+                  "template": "markdown",
+              },
+              timeout=30,
+          )
+          resp.raise_for_status()
+          body = resp.json()
+          if body.get("code") != 200:
+              print(f"[error] pushplus 推送失败: {body}")
+              sys.exit(1)
+          print("[ok] pushplus 测试推送成功")
+          PY
