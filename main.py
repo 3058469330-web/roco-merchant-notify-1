@@ -33,7 +33,7 @@ KIND_LABEL = {"pet": "精灵", "prop": "道具", "item": "道具"}
 
 # 时段锚点：8/12/16/20 点 ±30 分钟
 SLOT_HOURS = (8, 12, 16, 20)
-SLOT_WINDOW_MIN = 30
+SLOT_WINDOW_MIN = 45
 
 CN_TZ = timezone(timedelta(hours=8))
 

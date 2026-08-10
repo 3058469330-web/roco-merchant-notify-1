@@ -4,7 +4,8 @@ on:
   # 手动触发 + 定时触发（每 30 分钟一次，Asia/Shanghai；脚本内部按"8/12/16/20 时段"去重）
   workflow_dispatch:
   schedule:
-    - cron: "*/30 * * * *"
+    # 8/12/16/20 点前后 45 分钟内多触发几次，弥补 GitHub cron 延迟
+    - cron: "0,15,30,45 7-8,11-12,15-16,19-20 * * *"
       timezone: "Asia/Shanghai"
 
 jobs:
