@@ -21,8 +21,28 @@ jobs:
       - name: 安装依赖
         run: pip install requests
 
+      - name: 计算今天日期（Asia/Shanghai）
+        id: date
+        run: echo "cache_date=$(TZ=Asia/Shanghai date +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: 恢复今日时段去重缓存
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.rocom_slot_cache.txt
+          key: rocom-slot-cache-${{ steps.date.outputs.cache_date }}
+          restore-keys: rocom-slot-cache-
+
       - name: 拉取并推送远行商人信息
         env:
           ROCOM_TOKEN: ${{ secrets.ROCOM_TOKEN }}
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          SLOT_CACHE_FILE: ${{ github.workspace }}/.rocom_slot_cache.txt
         run: python main.py
+
+      - name: 保存今日时段去重缓存
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.rocom_slot_cache.txt
+          key: rocom-slot-cache-${{ steps.date.outputs.cache_date }}

@@ -25,7 +25,6 @@ import requests
 
 API_URL = "https://apii.xianyuw.cn/api/v1/rocom-merchant"
 PUSH_URL = "https://www.pushplus.plus/send"
-HISTORY_URL = "https://www.pushplus.plus/api/msg/list"
 
 MAX_RETRIES = 2
 RETRY_INTERVAL = 60
@@ -91,43 +90,43 @@ def send_pushplus(token: str, title: str, content: str) -> None:
         raise RuntimeError(f"pushplus 推送失败: code={body.get('code')} msg={body.get('msg')}")
 
 
-def already_pushed_this_slot(token: str, slot_hour: int, now_cn: datetime) -> bool:
-    """查询 pushplus 当天历史消息，判断当前时段是否已发过开市推送。"""
+def already_pushed_this_slot(slot_hour: int, now_cn: datetime) -> bool:
+    """通过读取本地 cache 文件判断当前时段是否已推过。
+
+    cache 文件由 notify.yml 在两次运行之间通过 actions/cache 保留，
+    内容格式：每行 "YYYY-MM-DD HH"，代表当天该时段已推过。
+    """
+    cache_file = os.environ.get("SLOT_CACHE_FILE", "/tmp/rocom_slot_cache.txt")
+    if not os.path.exists(cache_file):
+        return False
     try:
-        start_ts = int(now_cn.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
-        resp = requests.get(
-            HISTORY_URL,
-            params={"token": token, "startTime": start_ts, "endTime": int(now_cn.timestamp() * 1000), "pageSize": 50},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        body = resp.json()
+        today = now_cn.strftime("%Y-%m-%d")
+        slot_key = f"{today} {slot_hour:02d}"
+        with open(cache_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip() == slot_key:
+                    print(f"[info] 当前时段 {slot_hour:02d}:00 已推过（cache hit），跳过")
+                    return True
     except Exception as e:
-        print(f"[warn] 查 pushplus 历史失败: {e}，按未推送处理")
-        return False
-
-    if body.get("code") not in (200, 0):
-        print(f"[warn] pushplus 历史接口异常 code={body.get('code')}，按未推送处理")
-        return False
-
-    records = (body.get("data") or {}).get("list") or body.get("data") or []
-    slot_prefix = f"[{slot_hour:02d}:"
-    for r in records:
-        title = r.get("title") or ""
-        ts_ms = r.get("sendTime") or r.get("createTime") or 0
-        if not title.startswith("🛒") or "已开市" not in title:
-            continue
-        if not title.startswith(slot_prefix):
-            continue
-        try:
-            ts = datetime.fromtimestamp(int(ts_ms) / 1000, tz=CN_TZ)
-        except Exception:
-            continue
-        if ts.date() != now_cn.date():
-            continue
-        print(f"[info] 当前时段 {slot_hour:02d}:00 已推过（{title} @ {ts.strftime('%H:%M:%S')}），跳过")
-        return True
+        print(f"[warn] 读 slot cache 失败: {e}，按未推送处理")
     return False
+
+
+def mark_pushed_this_slot(slot_hour: int, now_cn: datetime) -> None:
+    """记录当前时段已推送，写入 cache 文件。"""
+    cache_file = os.environ.get("SLOT_CACHE_FILE", "/tmp/rocom_slot_cache.txt")
+    try:
+        today = now_cn.strftime("%Y-%m-%d")
+        slot_key = f"{today} {slot_hour:02d}"
+        existing = set()
+        if os.path.exists(cache_file):
+            with open(cache_file, "r", encoding="utf-8") as f:
+                existing = {line.strip() for line in f if line.strip()}
+        existing.add(slot_key)
+        with open(cache_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(sorted(existing)) + "\n")
+    except Exception as e:
+        print(f"[warn] 写 slot cache 失败: {e}")
 
 
 def main() -> int:
@@ -169,7 +168,7 @@ def main() -> int:
     status = data.get("round", {}).get("status")
 
     # —— 时段去重（仅正常推送模式生效）——
-    if not force_push and already_pushed_this_slot(pushplus_token, current_slot, now_cn):
+    if not force_push and already_pushed_this_slot(current_slot, now_cn):
         return 0
 
     # —— 开市判断 ——
@@ -183,6 +182,8 @@ def main() -> int:
     merchant_name = data.get("merchant_name", "远行商人")
     title = f"🛒 [{current_slot:02d}:{now_cn.minute:02d}] {merchant_name} 已开市"
     send_pushplus(pushplus_token, title, build_markdown(data))
+    if not force_push:
+        mark_pushed_this_slot(current_slot, now_cn)
     print(f"[ok] pushplus 推送成功（title={title}）")
     return 0
 
