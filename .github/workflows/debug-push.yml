@@ -21,5 +21,6 @@ jobs:
         env:
           ROCOM_TOKEN: ${{ secrets.ROCOM_TOKEN }}
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          PUSHPLUS_TOPIC: ${{ secrets.PUSHPLUS_TOPIC }}
           FORCE_PUSH: "1"
         run: python main.py
