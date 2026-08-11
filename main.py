@@ -13,6 +13,7 @@
 环境变量:
     ROCOM_TOKEN     必填  咸鱼API用户令牌（个人中心获取）
     PUSHPLUS_TOKEN  必填  pushplus 用户令牌（登录 https://www.pushplus.plus 查看）
+    PUSHPLUS_TOPIC   选填  一对多群组编码，填了则推送给群里所有成员；留空仅发给自己
     FORCE_PUSH      选填  设为 1/true/yes 时跳过去重与开市判断，强制推送
     SLOT_CACHE_FILE 选填  时段去重缓存文件路径
 """
@@ -74,17 +75,17 @@ def build_markdown(data: dict) -> str:
     return "\n".join(lines)
 
 
-def send_pushplus(token: str, title: str, content: str) -> None:
-    resp = requests.post(
-        PUSH_URL,
-        json={
-            "token": token,
-            "title": title,
-            "content": content,
-            "template": "markdown",
-        },
-        timeout=30,
-    )
+def send_pushplus(token: str, title: str, content: str, topic: str = "") -> None:
+    payload = {
+        "token": token,
+        "title": title,
+        "content": content,
+        "template": "markdown",
+    }
+    if topic:
+        # 一对多群组推送：发送给群组编码为 topic 的所有成员；不填则仅发给自己
+        payload["topic"] = topic
+    resp = requests.post(PUSH_URL, json=payload, timeout=30)
     resp.raise_for_status()
     body = resp.json()
     if body.get("code") != 200:
@@ -138,6 +139,7 @@ def main() -> int:
         return 1
 
     force_push = os.environ.get("FORCE_PUSH", "").strip().lower() in ("1", "true", "yes")
+    pushplus_topic = os.environ.get("PUSHPLUS_TOPIC", "").strip()
 
     # —— 判断是否处于有效时段（8/12/16/20 ±30 分钟）——
     now_cn = datetime.now(CN_TZ)
@@ -186,7 +188,7 @@ def main() -> int:
 
     merchant_name = data.get("merchant_name", "远行商人")
     title = f"🛒 [{current_slot:02d}:{now_cn.minute:02d}] {merchant_name} 已开市"
-    send_pushplus(pushplus_token, title, build_markdown(data))
+    send_pushplus(pushplus_token, title, build_markdown(data), topic=pushplus_topic)
     if not force_push:
         mark_pushed_this_slot(current_slot, now_cn)
     print(f"[ok] pushplus 推送成功（title={title}）")
@@ -195,4 +197,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
 
