@@ -9,20 +9,16 @@
     - GitHub Actions cron 不可靠（延迟 5-40 分钟），所以高频触发 + 内部去重
     - 当前时段（HH:00 ± 30 分钟）首次触发且开市则推送；同时段重复触发则跳过
     - FORCE_PUSH=1 跳过去重，强制推送（调试用）
-    - 每日 23:00 推送当日统计摘要（SUB_CMD=summary）
 
 环境变量:
     ROCOM_TOKEN     必填  咸鱼API用户令牌（个人中心获取）
     PUSHPLUS_TOKEN  必填  pushplus 用户令牌（登录 https://www.pushplus.plus 查看）
     FORCE_PUSH      选填  设为 1/true/yes 时跳过去重与开市判断，强制推送
-    SUB_CMD         选填  'summary' 触发当日日志摘要推送；否则走正常推送流程
     SLOT_CACHE_FILE 选填  时段去重缓存文件路径
-    DAILY_LOG_FILE  选填  当日推送日志 JSON 文件路径（用于摘要）
 """
 
 import os
 import sys
-import json
 import time
 from datetime import datetime, timezone, timedelta
 
@@ -135,10 +131,6 @@ def mark_pushed_this_slot(slot_hour: int, now_cn: datetime) -> None:
 
 
 def main() -> int:
-    sub_cmd = os.environ.get("SUB_CMD", "").strip().lower()
-    if sub_cmd == "summary":
-        return run_summary()
-
     rocom_token = os.environ.get("ROCOM_TOKEN", "").strip()
     pushplus_token = os.environ.get("PUSHPLUS_TOKEN", "").strip()
     if not rocom_token or not pushplus_token:
@@ -197,114 +189,10 @@ def main() -> int:
     send_pushplus(pushplus_token, title, build_markdown(data))
     if not force_push:
         mark_pushed_this_slot(current_slot, now_cn)
-    append_daily_log(
-        now_cn,
-        slot_hour=current_slot,
-        item_count=len(data.get("items", [])),
-        merchant_name=merchant_name,
-        force_push=force_push,
-    )
     print(f"[ok] pushplus 推送成功（title={title}）")
-    return 0
-
-
-def append_daily_log(now_cn: datetime, slot_hour: int, item_count: int,
-                     merchant_name: str, force_push: bool) -> None:
-    """记录一次成功推送到当日日志文件，用于 23:00 摘要统计。"""
-    log_file = os.environ.get("DAILY_LOG_FILE", "/tmp/rocom_daily_log.json")
-    record = {
-        "ts": now_cn.strftime("%Y-%m-%d %H:%M:%S"),
-        "slot": slot_hour,
-        "items": item_count,
-        "merchant": merchant_name,
-        "force": force_push,
-    }
-    records = []
-    try:
-        if os.path.exists(log_file):
-            with open(log_file, "r", encoding="utf-8") as f:
-                records = json.load(f) or []
-    except Exception:
-        records = []
-    records.append(record)
-    try:
-        with open(log_file, "w", encoding="utf-8") as f:
-            json.dump(records, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"[warn] 写 daily log 失败: {e}")
-
-
-def load_daily_log(now_cn: datetime) -> list:
-    log_file = os.environ.get("DAILY_LOG_FILE", "/tmp/rocom_daily_log.json")
-    today = now_cn.strftime("%Y-%m-%d")
-    try:
-        if not os.path.exists(log_file):
-            return []
-        with open(log_file, "r", encoding="utf-8") as f:
-            records = json.load(f) or []
-        return [r for r in records if r.get("ts", "").startswith(today)]
-    except Exception as e:
-        print(f"[warn] 读 daily log 失败: {e}")
-        return []
-
-
-def build_summary_markdown(records: list, now_cn: datetime) -> str:
-    today = now_cn.strftime("%Y-%m-%d")
-    total = len(records)
-    slot_set = sorted({r["slot"] for r in records})
-    slot_hits = {h: 0 for h in SLOT_HOURS}
-    total_items = 0
-    merchants = set()
-    for r in records:
-        slot_hits[r["slot"]] = slot_hits.get(r["slot"], 0) + 1
-        total_items += r.get("items", 0)
-        merchants.add(r.get("merchant", ""))
-    force_count = sum(1 for r in records if r.get("force"))
-
-    lines = [
-        f"## 📊 远行商人推送日报（{today}）",
-        "",
-        f"- **推送次数**：{total} 次" + (f"（含 FORCE_PUSH {force_count} 次）" if force_count else ""),
-        f"- **累计商品**：{total_items} 件",
-        f"- **涉及商人**：{', '.join(m for m in merchants if m) or '无'}",
-        f"- **命中时段**：{' / '.join(f'{h:02d}:00' for h in slot_set) or '无'}",
-        "",
-        "### 各时段推送明细",
-    ]
-    for h in SLOT_HOURS:
-        cnt = slot_hits.get(h, 0)
-        mark = "✅" if cnt > 0 else "⚪"
-        lines.append(f"- {mark} **{h:02d}:00** 时段：{cnt} 次")
-    if total:
-        lines.append("")
-        lines.append("### 最近 5 条推送")
-        for r in records[-5:]:
-            ts = r.get("ts", "")[11:]  # HH:MM:SS
-            lines.append(
-                f"- `{ts}` 时段 {r['slot']:02d}:00 · "
-                f"{r.get('merchant', '')} · 商品 {r.get('items', 0)} 件"
-                + (" · FORCE" if r.get("force") else "")
-            )
-    return "\n".join(lines)
-
-
-def run_summary() -> int:
-    pushplus_token = os.environ.get("PUSHPLUS_TOKEN", "").strip()
-    if not pushplus_token:
-        print("[error] 请配置 PUSHPLUS_TOKEN 环境变量")
-        return 1
-    now_cn = datetime.now(CN_TZ)
-    records = load_daily_log(now_cn)
-    content = build_summary_markdown(records, now_cn)
-    title = f"📊 [{now_cn.strftime('%m-%d')}] 远行商人推送日报"
-    try:
-        send_pushplus(pushplus_token, title, content)
-    except Exception as e:
-        print(f"[error] 摘要推送失败: {e}")
-        return 1
-    print(f"[ok] 摘要推送成功（推送 {len(records)} 条当日记录）")
     return 0
 
 
 if __name__ == "__main__":
     sys.exit(main())
+
