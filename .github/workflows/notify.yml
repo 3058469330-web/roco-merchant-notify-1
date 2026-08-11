@@ -10,7 +10,10 @@ on:
         default: ''
         type: string
   schedule:
-    # 8/12/16/20 点前后各 1.5 小时每 15 分钟触发一次，弥补 GitHub cron 延迟
+    # 精确触发：每个时段整点 5 分钟跑一次，覆盖开市第一时间
+    - cron: "5 8,12,16,20 * * *"
+      timezone: "Asia/Shanghai"
+    # 高频兜底：8/12/16/20 点前后各 1.5 小时每 15 分钟触发一次，弥补 GitHub cron 延迟
     - cron: "0,15,30,45 6-9,10-13,14-17,18-21 * * *"
       timezone: "Asia/Shanghai"
 
