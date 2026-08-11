@@ -26,14 +26,14 @@ import requests
 API_URL = "https://apii.xianyuw.cn/api/v1/rocom-merchant"
 PUSH_URL = "https://www.pushplus.plus/send"
 
-MAX_RETRIES = 2
-RETRY_INTERVAL = 60
+MAX_RETRIES = 3
+RETRY_INTERVAL = 45
 
 KIND_LABEL = {"pet": "精灵", "prop": "道具", "item": "道具"}
 
-# 时段锚点：8/12/16/20 点 ±30 分钟
+# 时段锚点：8/12/16/20 点 ±75 分钟
 SLOT_HOURS = (8, 12, 16, 20)
-SLOT_WINDOW_MIN = 45
+SLOT_WINDOW_MIN = 75
 
 CN_TZ = timezone(timedelta(hours=8))
 
@@ -158,7 +158,7 @@ def main() -> int:
     for attempt in range(1, MAX_RETRIES + 1):
         data = fetch_merchant(rocom_token, refresh=(attempt > 1))
         status = data.get("round", {}).get("status")
-        if status == "open" and data.get("items"):
+        if data.get("items"):
             break
         print(f"[info] 第 {attempt}/{MAX_RETRIES} 次: 状态={status}，"
               f"商品数={data.get('item_count', 0)}，{RETRY_INTERVAL}s 后重试")
@@ -171,12 +171,12 @@ def main() -> int:
     if not force_push and already_pushed_this_slot(current_slot, now_cn):
         return 0
 
-    # —— 开市判断 ——
-    if not force_push and (status != "open" or not data.get("items")):
-        print("[info] 商人未开市或暂无商品，本次不推送")
+    # —— 开市判断（以商品数据为准；status 切换有滞后，有商品即视为已开市）——
+    if not force_push and not data.get("items"):
+        print("[info] 商人暂无商品，本次不推送")
         return 0
 
-    if force_push and (status != "open" or not data.get("items")):
+    if force_push and not data.get("items"):
         print("[info] FORCE_PUSH 已启用,忽略开市判断,强制推送当前数据")
 
     merchant_name = data.get("merchant_name", "远行商人")
