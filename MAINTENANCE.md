@@ -56,22 +56,49 @@ roco-merchant-notify/
 
 ## 4. 每个配置块的现状与改动方式
 
-### 4.1 定时触发（GitHub Actions 内置 schedule）
+### 4.1 定时触发（双保险：外部准点 + GitHub schedule 兜底）
+
+**策略**：cron-job.org 在 8/12/16/20 点准点触发 `workflow_dispatch`（主触发）；
+GitHub 内置 schedule 保留为高频兜底（万一外部 job 挂了也不漏）。
+脚本内时段去重保证**每个时段只推一次**，双触发不会重复推送。
+
+#### A. GitHub 内置 schedule（兜底，勿删）
 
 - 位置：`.github/workflows/notify.yml` 的 `on.schedule`
 - **cron**：`0,15,30,45 6-9,10-13,14-17,18-21 * * *`（Asia/Shanghai）
   - 即 8/12/16/20 点前后各 1.5 小时、每 15 分钟触发一次
 - 高频原因是 **GitHub Actions 的 schedule 触发存在不可控延迟**（实测可到 70+ 分钟），
   必须靠多触发点 + 脚本内时段去重兜底，不能依赖单点准时触发
-- **去重**：`main.py` 内 `already_pushed_this_slot()` 用 `.rocom_slot_cache.txt`
-  记录"当天某时段已推过"，重复触发会自动跳过
 
 **关键认知（踩过的坑）**：
 
 1. GitHub 官方明确 schedule 事件不保证准时，延迟几分钟到 1 小时+ 都可能。
 2. 每个时段锚点 8/12/16/20 ±75 分钟窗口内，脚本只推送一次（靠 cache 去重）。
-3. 若改成外部精准定时（cron-job.org → workflow_dispatch），可消除延迟，
-   但需要外部账号维护 PAT，当前选择 GitHub 内置 schedule 的"高频覆盖"策略。
+
+#### B. cron-job.org 准点触发（主触发，已启用）
+
+- 平台：cron-job.org（免费，网页点按钮即可，无需 REST API）
+- 建 **1 个 job**，每天 08:03 / 12:03 / 16:03 / 20:03（Asia/Shanghai）各触发一次
+- 设 `:03` 是为了避开整点高峰
+
+**网页建 job 的配置**：
+
+| 字段 | 值 |
+|---|---|
+| URL | `https://api.github.com/repos/3058469330-web/roco-merchant-notify-1/actions/workflows/notify.yml/dispatches` |
+| Method | `POST` |
+| Request Headers | `Authorization: Bearer <你的GitHub PAT>`、`Content-Type: application/json` |
+| Request Body | `{"ref":"main"}` |
+| Schedule | hours `[8,12,16,20]` + minutes `[3]`，时区 `Asia/Shanghai` |
+
+**GitHub PAT 要求**：Classic token，权限勾选 **`repo`** 和 **`workflow`**。
+
+**网页版填法**（比 REST API 简单，无 extendedData 坑）：
+新建 job 时在 "Request" 区块填 Headers 与 Body；
+正文类型选 `application/json` 后 Body 里写 `{"ref":"main"}`。
+建好后点 job 的 "Run now" 验证一次，再去 Actions 页面确认触发。
+
+> ⚠️ 若用 cron-job 的 **REST API** 改 job，Headers/Body 字段在 `extendedData` 下（不在顶层 `requestHeaders`），详见旧版坑记录——网页操作可完全绕开。
 
 ### 4.2 GitHub Secrets（改这里）
 
@@ -87,7 +114,7 @@ roco-merchant-notify/
 ### 4.3 GitHub workflow（.github/workflows/notify.yml）
 
 - `name`: 远行商人提醒
-- 触发：`workflow_dispatch` + `on: schedule`（高频覆盖，见 §4.1）
+- 触发：`workflow_dispatch`（cron-job 准点调用）+ `on: schedule`（高频兜底，见 §4.1）
 - job `notify`（ubuntu-latest, timeout 15min）：checkout → setup-python 3.11 → pip install requests → `python main.py`
 - 环境变量：`ROCOM_TOKEN: ${{ secrets.ROCOM_TOKEN }}`、`PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}`
 
@@ -106,8 +133,8 @@ roco-merchant-notify/
 
 ## 5. 给未来 AI 的硬规则（禁止项）
 
-1. **不要**把任何真实令牌写进代码、注释、README、文档或日志（`ROCOM_TOKEN`、`PUSHPLUS_TOKEN` 全部只放 Secret）。
-2. **不要**把 `on: schedule` 移除改成外部定时（会失去高频覆盖兜底；除非同时引入 cron-job 精准触发并去掉 schedule，避免双触发）。
+1. **不要**把任何真实令牌写进代码、注释、README、文档或日志（`ROCOM_TOKEN`、`PUSHPLUS_TOKEN`、cron-job 里用的 GitHub PAT 全部只放 Secret/外部配置）。
+2. **不要**把 `on: schedule` 移除——它是 cron-job 失效时的兜底。两者叠加靠脚本时段去重，不会重复推送。
 3. **不要**把开市判断改回 `status == "open"` 硬性条件（status 有滞后，会漏推；以 `items` 是否有数据为准）。
 4. **不要**为了「回调」「平台」而给这个方案引入 checkin-cron-worker（已弃用）。
 5. 改数据源路径、字段名（`items`、`round.status`、`items[].name/price/limit/kind`）时要对照咸鱼 API 实际返回，别凭猜。
