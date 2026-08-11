@@ -9,12 +9,20 @@ on:
         required: false
         default: ''
         type: string
+      sub_cmd:
+        description: '子命令（留空=正常推送；summary=当日日志摘要）'
+        required: false
+        default: ''
+        type: string
   schedule:
     # 精确触发：每个时段整点 5 分钟跑一次，覆盖开市第一时间
     - cron: "5 8,12,16,20 * * *"
       timezone: "Asia/Shanghai"
     # 高频兜底：8/12/16/20 点前后各 1.5 小时每 15 分钟触发一次，弥补 GitHub cron 延迟
     - cron: "0,15,30,45 6-9,10-13,14-17,18-21 * * *"
+      timezone: "Asia/Shanghai"
+    # 每日 23:00 推送当日统计摘要
+    - cron: "0 23 * * *"
       timezone: "Asia/Shanghai"
 
 jobs:
@@ -35,25 +43,31 @@ jobs:
         id: date
         run: echo "cache_date=$(TZ=Asia/Shanghai date +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
-      - name: 恢复今日时段去重缓存
+      - name: 恢复今日缓存（时段去重 + 当日推送日志）
         id: cache-restore
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/.rocom_slot_cache.txt
-          key: rocom-slot-cache-${{ steps.date.outputs.cache_date }}
-          restore-keys: rocom-slot-cache-
+          path: |
+            ${{ github.workspace }}/.rocom_slot_cache.txt
+            ${{ github.workspace }}/.rocom_daily_log.json
+          key: rocom-cache-${{ steps.date.outputs.cache_date }}
+          restore-keys: rocom-cache-
 
       - name: 拉取并推送远行商人信息
         env:
           ROCOM_TOKEN: ${{ secrets.ROCOM_TOKEN }}
           PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
           FORCE_PUSH: ${{ github.event.inputs.force_push }}
+          SUB_CMD: ${{ github.event.inputs.sub_cmd }}
           SLOT_CACHE_FILE: ${{ github.workspace }}/.rocom_slot_cache.txt
+          DAILY_LOG_FILE: ${{ github.workspace }}/.rocom_daily_log.json
         run: python main.py
 
-      - name: 保存今日时段去重缓存
+      - name: 保存今日缓存
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/.rocom_slot_cache.txt
-          key: rocom-slot-cache-${{ steps.date.outputs.cache_date }}
+          path: |
+            ${{ github.workspace }}/.rocom_slot_cache.txt
+            ${{ github.workspace }}/.rocom_daily_log.json
+          key: rocom-cache-${{ steps.date.outputs.cache_date }}
