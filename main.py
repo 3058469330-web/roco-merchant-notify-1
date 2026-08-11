@@ -148,8 +148,12 @@ def main() -> int:
             break
 
     if not current_slot:
-        print(f"[info] 当前 {now_cn.strftime('%H:%M')} 不在推送时段窗口（{SLOT_HOURS} ±{SLOT_WINDOW_MIN}min），跳过")
-        return 0
+        if force_push:
+            current_slot = now_cn.hour
+            print(f"[info] FORCE_PUSH 已启用，跳过时段窗口判断")
+        else:
+            print(f"[info] 当前 {now_cn.strftime('%H:%M')} 不在推送时段窗口（{SLOT_HOURS} ±{SLOT_WINDOW_MIN}min），跳过")
+            return 0
 
     print(f"[info] 当前 {now_cn.strftime('%H:%M')} 命中时段 {current_slot:02d}:00 ±{SLOT_WINDOW_MIN}min")
 
