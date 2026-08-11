@@ -27,8 +27,8 @@ import requests
 API_URL = "https://apii.xianyuw.cn/api/v1/rocom-merchant"
 PUSH_URL = "https://www.pushplus.plus/send"
 
-MAX_RETRIES = 3
-RETRY_INTERVAL = 45
+MAX_RETRIES = 5
+RETRY_INTERVAL = 15
 
 KIND_LABEL = {"pet": "精灵", "prop": "道具", "item": "道具"}
 
@@ -158,10 +158,10 @@ def main() -> int:
 
     print(f"[info] 当前 {now_cn.strftime('%H:%M')} 命中时段 {current_slot:02d}:00 ±{SLOT_WINDOW_MIN}min")
 
-    # —— 轮询等待数据刷新/开市 ——
+    # —— 轮询等待数据刷新/开市（首次强制 refresh=true，避免命中陈旧缓存）——
     data = None
     for attempt in range(1, MAX_RETRIES + 1):
-        data = fetch_merchant(rocom_token, refresh=(attempt > 1))
+        data = fetch_merchant(rocom_token, refresh=True)
         status = data.get("round", {}).get("status")
         if data.get("items"):
             break
