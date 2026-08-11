@@ -46,14 +46,17 @@ on:
 
 推送后 GitHub 会自动按点触发。
 
-**方式 B(原项目方式,cron-job.org)**:在 cron-job.org 建 4 个 job(每天 08/12/16/20,Asia/Shanghai):
+**方式 B(推荐,准点触发,免 GitHub 延迟)**:用 Cloudflare Worker 每天准点(08:03/12:03/16:03/20:03)触发一次 `workflow_dispatch`:
 
 ```text
-URL: https://api.github.com/repos/<你的用户名>/<仓库名>/actions/workflows/notify.yml/dispatches
-方法: POST
-Headers: Authorization: Bearer <GitHub PAT>  /  Content-Type: application/json
-Body: {"ref":"main"}
+Worker 代码:仓库内 cloudflare-worker-notify-cron.js(scheduled 事件)
+部署:  wrangler deploy cloudflare-worker-notify-cron.js --name roco-notify-cron \
+         --triggers "3 0 * * *" "3 4 * * *" "3 8 * * *" "3 12 * * *"
+Secret: GH_REPO=<你的用户名/仓库名>、GH_WORKFLOW=notify.yml、GH_PAT=<GitHub PAT>
 ```
+
+Cloudflare Cron 用 UTC(北京 = UTC+8),上表 4 条 cron 对应北京 08:03/12:03/16:03/20:03。
+需要「编辑 Cloudflare Workers」模板的 CF API Token(账户资源记得绑定账户)。
 
 GitHub PAT 在 github.com/settings/tokens 生成,勾选 `repo` 和 `workflow` 权限。
 

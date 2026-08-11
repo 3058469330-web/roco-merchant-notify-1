@@ -12,7 +12,7 @@
 - 数据源：咸鱼API开放平台（[apii.xianyuw.cn](https://apii.xianyuw.cn/)），免费注册领 Token
 - 推送出口：pushplus（[www.pushplus.plus/send](https://www.pushplus.plus/send)，markdown 模板）
 - 运行引擎：GitHub Actions（公开仓库，免费额度）
-- 定时器：GitHub Actions 内置 `on: schedule`（高频覆盖补偿其延迟）
+- 定时器：Cloudflare Worker Cron Triggers 准点触发（主）+ GitHub Actions `on: schedule` 高频兜底
 
 **全链路零成本。**
 
@@ -35,7 +35,8 @@ main.py
 ```
 
 **分工清晰**：
-- **GitHub schedule = 定时器**（高频触发，靠脚本内时段去重，容忍其延迟）
+- **Cloudflare Worker Cron = 准点定时器**（每天 08:03/12:03/16:03/20:03，稳定准时）
+- **GitHub schedule = 高频兜底**（每 15 分钟，容忍其延迟，Worker 失效时不漏推）
 - **GitHub Actions = 执行引擎**（真实跑 Python）
 - **pushplus = 通知出口**（脚本直接调）
 
@@ -49,6 +50,7 @@ roco-merchant-notify/
 ├── .gitignore                     忽略 __pycache__ / *.pyc
 ├── README.md                      面向使用者的部署说明
 ├── MAINTENANCE.md                 本文档（面向维护者/AI）
+├── cloudflare-worker-notify-cron.js  Cloudflare Worker 定时触发代码（主触发）
 └── main.py                        主脚本（逻辑 + 推送）
 ```
 
@@ -58,8 +60,8 @@ roco-merchant-notify/
 
 ### 4.1 定时触发（双保险：外部准点 + GitHub schedule 兜底）
 
-**策略**：cron-job.org 在 8/12/16/20 点准点触发 `workflow_dispatch`（主触发）；
-GitHub 内置 schedule 保留为高频兜底（万一外部 job 挂了也不漏）。
+**策略**：Cloudflare Worker Cron Triggers 在 8/12/16/20 点准点触发 `workflow_dispatch`（主触发）；
+GitHub 内置 schedule 保留为高频兜底（万一 Worker 失效也不漏）。
 脚本内时段去重保证**每个时段只推一次**，双触发不会重复推送。
 
 #### A. GitHub 内置 schedule（兜底，勿删）
@@ -75,34 +77,54 @@ GitHub 内置 schedule 保留为高频兜底（万一外部 job 挂了也不漏�
 1. GitHub 官方明确 schedule 事件不保证准时，延迟几分钟到 1 小时+ 都可能。
 2. 每个时段锚点 8/12/16/20 ±75 分钟窗口内，脚本只推送一次（靠 cache 去重）。
 
-#### B. cron-job.org 准点触发（主触发，已启用）
+#### B. Cloudflare Worker 准点触发（主触发，已启用）
 
-- 平台：cron-job.org（免费，网页点按钮即可，无需 REST API）
-- 建 **1 个 job**，每天 08:03 / 12:03 / 16:03 / 20:03（Asia/Shanghai）各触发一次
+- 平台：Cloudflare Workers（免费版每天 Cron 限额 10 次，本方案用 4 次，够用）
+- Worker 名称：`roco-notify-cron`（部署域：`roco-notify-cron.<account>.workers.dev`）
+- 代码：仓库内 `cloudflare-worker-notify-cron.js`，`scheduled` handler 在每次 Cron 触发时
+  调 GitHub `workflows/dispatches` API 触发 `notify.yml`
+- 每天 08:03 / 12:03 / 16:03 / 20:03（Asia/Shanghai）各触发一次
 - 设 `:03` 是为了避开整点高峰
 
-**网页建 job 的配置**：
+**Cron 时间换算（Cloudflare 用 UTC，北京 = UTC+8）**：
 
-| 字段 | 值 |
+| 北京 | UTC cron |
 |---|---|
-| URL | `https://api.github.com/repos/3058469330-web/roco-merchant-notify-1/actions/workflows/notify.yml/dispatches` |
-| Method | `POST` |
-| Request Headers | `Authorization: Bearer <你的GitHub PAT>`、`Content-Type: application/json` |
-| Request Body | `{"ref":"main"}` |
-| Schedule | hours `[8,12,16,20]` + minutes `[3]`，时区 `Asia/Shanghai` |
+| 08:03 | `3 0 * * *` |
+| 12:03 | `3 4 * * *` |
+| 16:03 | `3 8 * * *` |
+| 20:03 | `3 12 * * *` |
 
-**GitHub PAT 要求**：Classic token，权限勾选 **`repo`** 和 **`workflow`**。
+**Worker 环境变量（Secret）**：
 
-**网页版填法**（比 REST API 简单，无 extendedData 坑）：
-新建 job 时在 "Request" 区块填 Headers 与 Body；
-正文类型选 `application/json` 后 Body 里写 `{"ref":"main"}`。
-建好后点 job 的 "Run now" 验证一次，再去 Actions 页面确认触发。
+| Secret | 值 |
+|---|---|
+| `GH_REPO` | `3058469330-web/roco-merchant-notify-1` |
+| `GH_WORKFLOW` | `notify.yml` |
+| `GH_PAT` | GitHub Classic token，权限勾选 **`repo`** + **`workflow`** |
+| `GH_BRANCH` | `main`（可省略，默认 main） |
 
-> ⚠️ 若用 cron-job 的 **REST API** 改 job，Headers/Body 字段在 `extendedData` 下（不在顶层 `requestHeaders`），详见旧版坑记录——网页操作可完全绕开。
+**部署/修改方式（wrangler CLI，需账号 CF API Token）**：
+
+```bash
+export CLOUDFLARE_API_TOKEN=<你的token> CLOUDFLARE_ACCOUNT_ID=<你的account id>
+# 部署代码 + 4 条 Cron（UTC，见上表）
+wrangler deploy cloudflare-worker-notify-cron.js --name roco-notify-cron \
+  --triggers "3 0 * * *" "3 4 * * *" "3 8 * * *" "3 12 * * *"
+# 逐个写 Secret
+echo "3058469330-web/roco-merchant-notify-1" | wrangler secret put GH_REPO --name roco-notify-cron
+echo "notify.yml"                             | wrangler secret put GH_WORKFLOW --name roco-notify-cron
+echo "<你的GitHub PAT>"                       | wrangler secret put GH_PAT --name roco-notify-cron
+```
+
+**CF API Token 要求**（踩过的坑）：必须选「编辑 Cloudflare Workers」模板，
+权限含 `账户 → Workers 脚本 → 编辑`，且**账户资源必须绑定账户**（选「所有账户」或指定账户），
+只读 token（`Workers 脚本 - 读取`）无法部署。创建时在向导第 3 步把「账户资源」从默认
+「不包括任何账户资源」改成「包括 → 所有账户」。
 
 ### 4.2 GitHub Secrets（改这里）
 
-仓库 `wwwqqq001/roco-merchant-notify` → Settings → Secrets and variables → Actions：
+仓库 `3058469330-web/roco-merchant-notify-1` → Settings → Secrets and variables → Actions：
 
 | Secret | 作用 | 备注 |
 |---|---|---|
@@ -114,7 +136,7 @@ GitHub 内置 schedule 保留为高频兜底（万一外部 job 挂了也不漏�
 ### 4.3 GitHub workflow（.github/workflows/notify.yml）
 
 - `name`: 远行商人提醒
-- 触发：`workflow_dispatch`（cron-job 准点调用）+ `on: schedule`（高频兜底，见 §4.1）
+- 触发：`workflow_dispatch`（Cloudflare Worker 准点调用）+ `on: schedule`（高频兜底，见 §4.1）
 - job `notify`（ubuntu-latest, timeout 15min）：checkout → setup-python 3.11 → pip install requests → `python main.py`
 - 环境变量：`ROCOM_TOKEN: ${{ secrets.ROCOM_TOKEN }}`、`PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}`
 
@@ -133,22 +155,24 @@ GitHub 内置 schedule 保留为高频兜底（万一外部 job 挂了也不漏�
 
 ## 5. 给未来 AI 的硬规则（禁止项）
 
-1. **不要**把任何真实令牌写进代码、注释、README、文档或日志（`ROCOM_TOKEN`、`PUSHPLUS_TOKEN`、cron-job 里用的 GitHub PAT 全部只放 Secret/外部配置）。
-2. **不要**把 `on: schedule` 移除——它是 cron-job 失效时的兜底。两者叠加靠脚本时段去重，不会重复推送。
+1. **不要**把任何真实令牌写进代码、注释、README、文档或日志（`ROCOM_TOKEN`、`PUSHPLUS_TOKEN`、Cloudflare Worker 里的 `GH_PAT` 全部只放 Secret/外部配置）。
+2. **不要**把 `on: schedule` 移除——它是 Cloudflare Worker 失效时的兜底。两者叠加靠脚本时段去重，不会重复推送。
 3. **不要**把开市判断改回 `status == "open"` 硬性条件（status 有滞后，会漏推；以 `items` 是否有数据为准）。
 4. **不要**为了「回调」「平台」而给这个方案引入 checkin-cron-worker（已弃用）。
-5. 改数据源路径、字段名（`items`、`round.status`、`items[].name/price/limit/kind`）时要对照咸鱼 API 实际返回，别凭猜。
-6. pushplus 需要账号完成实名认证才能调用发送接口（返回码 `905`）；文字消息超长会被 pushplus 截断（`build_markdown` 已精简，不再发卡片图）。
-7. Windows 下 git 会提示 LF→CRLF，正常，不影响。
+5. **不要**在 Worker 代码里硬编码 GitHub PAT 或仓库名——统一用 `env.GH_*` 读 Secret。
+6. **不要**把 Cloudflare 的 cron 时间按北京时间写——Cloudflare 用 UTC，北京 = UTC+8，需换算（见 §4.1 表格）。
+7. 改数据源路径、字段名（`items`、`round.status`、`items[].name/price/limit/kind`）时要对照咸鱼 API 实际返回，别凭猜。
+8. pushplus 需要账号完成实名认证才能调用发送接口（返回码 `905`）；文字消息超长会被 pushplus 截断（`build_markdown` 已精简，不再发卡片图）。
+9. Windows 下 git 会提示 LF→CRLF，正常，不影响。
 
 ---
 
 ## 6. 如何手动跑一次验证
 
-推荐**直接在 GitHub 跑**（和 cron-job 触发的是同一条 workflow）：
+推荐**直接在 GitHub 跑**（和 Cloudflare Worker 触发的是同一条 workflow）：
 
 ```bash
-gh workflow run "远行商人提醒" --repo wwwqqq001/roco-merchant-notify --ref main
+gh workflow run "远行商人提醒" --repo 3058469330-web/roco-merchant-notify-1 --ref main
 ```
 
 或浏览器：仓库 → Actions → 远行商人提醒 → **Run workflow**。
@@ -156,8 +180,8 @@ gh workflow run "远行商人提醒" --repo wwwqqq001/roco-merchant-notify --ref
 看日志：
 
 ```bash
-gh run list --repo wwwqqq001/roco-merchant-notify --workflow="远行商人提醒" --limit=1
-gh run view <runId> --repo wwwqqq001/roco-merchant-notify --log
+gh run list --repo 3058469330-web/roco-merchant-notify-1 --workflow="远行商人提醒" --limit=1
+gh run view <runId> --repo 3058469330-web/roco-merchant-notify-1 --log
 ```
 
 **期望输出**（有商品时）：
